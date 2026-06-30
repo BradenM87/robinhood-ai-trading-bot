@@ -4,17 +4,31 @@ Adds a verification gate before order execution so only authenticated
 agents can place trades. Disabled by default — opt in via config.
 
 The verifier interface is pluggable. The built-in TokenVerifier checks
-a static token from config. Implement AgentVerifier for any identity
-system (JWT, API keys, ZKP, etc.).
+a runtime token against a trusted secret from env/config. Implement
+AgentVerifier for any identity system (JWT, API keys, ZKP, etc.).
+
+How it works:
+1. On startup, AGENT_IDENTITY_SECRET is loaded from config (env var).
+2. Before each trade, the bot calls check_agent_identity() with a
+   runtime token (from the agent's execution context).
+3. The verifier checks the runtime token against the trusted secret.
+4. If they don't match (or verification fails), the trade is blocked.
+
+This prevents unauthorized processes from executing trades even if
+they have access to the Robinhood API credentials.
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+_MAX_AUDIT_ENTRIES = 1000
 
 
 @dataclass
@@ -29,77 +43,83 @@ class VerificationResult:
 class AgentVerifier(ABC):
     """Pluggable agent identity verifier.
 
-    Implement this for any identity system: JWT validation,
+    Implement for any identity system: JWT validation,
     API key lookup, ZKP proof checking, etc.
     """
 
     @abstractmethod
-    def verify(self, token: str) -> VerificationResult:
-        """Verify an agent token and return the result."""
+    def verify(self, runtime_token: str) -> VerificationResult:
+        """Verify a runtime token and return the result."""
 
 
 class TokenVerifier(AgentVerifier):
-    """Simple token-based verifier for development.
+    """Token-based verifier.
 
-    Compares the provided token against a configured secret.
-    NOT for production — use a real verifier.
+    Compares a runtime token (from the agent's execution context)
+    against a trusted secret (from env/config). These must be
+    different sources — if the runtime token comes from the same
+    config as the secret, verification is meaningless.
     """
 
-    def __init__(self, expected_token: str):
-        if not expected_token:
+    def __init__(self, trusted_secret: str):
+        if not trusted_secret:
             raise ValueError(
-                "TokenVerifier requires a non-empty token. "
-                "Set AGENT_IDENTITY_TOKEN in config."
+                "TokenVerifier requires a non-empty trusted secret. "
+                "Set AGENT_IDENTITY_SECRET in your environment."
             )
-        self._expected = expected_token
+        self._secret = trusted_secret
 
-    def verify(self, token: str) -> VerificationResult:
-        if not token:
-            return VerificationResult(verified=False, reason="no token provided")
-        if token != self._expected:
-            return VerificationResult(verified=False, reason="token mismatch")
+    def verify(self, runtime_token: str) -> VerificationResult:
+        if not runtime_token:
+            return VerificationResult(verified=False, reason="no runtime token provided")
+        if runtime_token != self._secret:
+            return VerificationResult(verified=False, reason="token does not match trusted secret")
         return VerificationResult(verified=True, agent_id="auto-trader")
 
 
-# Audit log for verification decisions
-_audit_log: list[dict] = []
+# Bounded audit log
+_audit_log: deque = deque(maxlen=_MAX_AUDIT_ENTRIES)
 
 
-def check_agent_identity(config) -> Optional[str]:
+def check_agent_identity(config, runtime_token: Optional[str] = None) -> Optional[str]:
     """Check agent identity before order execution.
-
-    Called from buy_stock() and sell_stock() in auto mode.
-    Returns None if verified (or verification disabled),
-    or an error message string if denied.
 
     Args:
         config: The config module with identity settings.
+        runtime_token: Token from the agent's execution context.
+            If None, reads from AGENT_IDENTITY_RUNTIME_TOKEN env var.
 
     Returns:
-        None if authorized, error message if denied.
+        None if authorized (or verification disabled),
+        error message string if denied.
     """
     enabled = getattr(config, "AGENT_IDENTITY_VERIFICATION", False)
     if not enabled:
         return None
 
-    token = getattr(config, "AGENT_IDENTITY_TOKEN", "")
-    if not token:
-        msg = "AGENT_IDENTITY_VERIFICATION is enabled but AGENT_IDENTITY_TOKEN is empty"
+    # Trusted secret from config/env (set at deploy time)
+    secret = getattr(config, "AGENT_IDENTITY_SECRET", "") or os.environ.get("AGENT_IDENTITY_SECRET", "")
+    if not secret:
+        msg = "AGENT_IDENTITY_VERIFICATION is enabled but AGENT_IDENTITY_SECRET is not set"
         logger.error(f"[identity] {msg}")
         return msg
 
-    verifier = TokenVerifier(token)
+    # Runtime token from the execution context (different source)
+    token = runtime_token or os.environ.get("AGENT_IDENTITY_RUNTIME_TOKEN", "")
+    if not token:
+        msg = "No runtime token provided and AGENT_IDENTITY_RUNTIME_TOKEN env var is empty"
+        logger.error(f"[identity] {msg}")
+        return msg
 
-    # In auto mode, the token is self-held — verify it matches config
+    verifier = TokenVerifier(secret)
     result = verifier.verify(token)
 
-    entry = {
+    _audit_log.append({
         "action": "allow" if result.verified else "deny",
         "agent_id": result.agent_id,
         "reason": result.reason,
         "timestamp": result.timestamp,
-    }
-    _audit_log.append(entry)
+    })
 
     if not result.verified:
         logger.warning(f"[identity] DENIED: {result.reason}")
@@ -109,6 +129,6 @@ def check_agent_identity(config) -> Optional[str]:
     return None
 
 
-def get_audit_log() -> list[dict]:
-    """Read-only access to the verification audit log."""
+def get_audit_log() -> list:
+    """Read-only copy of the verification audit log."""
     return list(_audit_log)
