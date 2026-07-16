@@ -5,10 +5,18 @@ OP_VAULT_NAME = ""                          # 1Password vault name (for Robinhoo
 OP_ITEM_NAME = ""                           # 1Password item name (for Robinhood MFA secret)
 
 # Credentials
-OPENAI_API_KEY = "..."                      # OpenAI API key
+CLAUDE_API_KEY = "..."                      # Claude (Anthropic) API key
 ROBINHOOD_USERNAME = "..."                  # Robinhood username
 ROBINHOOD_PASSWORD = "..."                  # Robinhood password
 ROBINHOOD_MFA_SECRET = ""                   # Robinhood MFA secret (if enabled)
+
+# AI Model Selection
+USE_CLAUDE = True                           # Set to True to use Claude, False for OpenAI
+CLAUDE_MODEL_NAME = "claude-3-5-sonnet-20241022"  # Claude model name
+
+# Legacy OpenAI config (kept for backwards compatibility)
+OPENAI_API_KEY = ""                         # OpenAI API key (if using OpenAI)
+OPENAI_MODEL_NAME = "gpt-4o-mini"           # OpenAI model name (if using OpenAI)
 
 # Basic config parameters
 MODE = "demo"                               # Trading mode (demo, auto, manual)
@@ -24,6 +32,3 @@ MIN_SELLING_AMOUNT_USD = 1.0                # Minimum sell amount in USD (False 
 MAX_SELLING_AMOUNT_USD = 10.0               # Maximum sell amount in USD (False - disable setting)
 MIN_BUYING_AMOUNT_USD = 1.0                 # Minimum buy amount in USD (False - disable setting)
 MAX_BUYING_AMOUNT_USD = 10.0                # Maximum buy amount in USD (False - disable setting)
-
-# OpenAI config params
-OPENAI_MODEL_NAME = "gpt-4o-mini"           # OpenAI model name
