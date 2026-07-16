@@ -5,7 +5,7 @@ import asyncio
 
 from config import *
 from src.api import robinhood
-from src.api import openai
+from src.api import claude, openai  # Import both claude and openai
 from src.utils import logger
 
 
@@ -69,10 +69,20 @@ def make_ai_decisions(account_info, portfolio_overview, watchlist_overview):
         "- Provide only the JSON output with no additional text.\n"
         "- Return an empty array if no actions are necessary."
     )
+    
     logger.debug(f"AI making-decisions prompt:{chr(10)}{ai_prompt}")
-    ai_response = openai.make_ai_request(ai_prompt)
-    logger.debug(f"AI making-decisions response:{chr(10)}{ai_response.choices[0].message.content.strip()}")
-    decisions = openai.parse_ai_response(ai_response)
+    
+    # Use Claude or OpenAI based on config
+    if USE_CLAUDE:
+        logger.info("Using Claude AI for trading decisions...")
+        ai_response = claude.make_ai_request(ai_prompt)
+        decisions = claude.parse_ai_response(ai_response)
+    else:
+        logger.info("Using OpenAI for trading decisions...")
+        ai_response = openai.make_ai_request(ai_prompt)
+        decisions = openai.parse_ai_response(ai_response)
+    
+    logger.debug(f"AI making-decisions response:{chr(10)}{ai_response.content[0].text.strip() if USE_CLAUDE else ai_response.choices[0].message.content.strip()}")
     return decisions
 
 
@@ -327,4 +337,3 @@ if __name__ == '__main__':
         logger.warning("Exiting the bot...")
         exit()
     asyncio.run(main())
-
